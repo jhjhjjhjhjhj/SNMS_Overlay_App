@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <!-- 
+        앱 설치
+
+        (mac)
+        npm run build:mac
+ß
+        (win)
+        npm run build:win
+          
+    -->
+    <meta charset="utf-8">
+    <title>ShinyColors Spine Viewer</title>
+    <script src="https://pixijs.download/v7.4.2/pixi.min.js"></script>
+    <script src="https://pixijs.download/v7.4.2/pixi-legacy.min.js"></script>
+    <script src="pixi-spine.js"></script>
+<style>
+    body { 
+        margin: 0; 
+        padding: 0;
+        background-color: transparent;
+        overflow: hidden;
+    }
+    canvas { 
+        display: block;
+        position: absolute;
+    }
+</style>
+</head>
+<body>
+    <script>
+        const { ipcRenderer } = require('electron');
+        const fs = require('fs');
+        const path = require('path');
+        
+        const getAssetPath = (filepath) => {
+            const isDev = process.env.NODE_ENV === 'development';
+            if (isDev) {
+                return filepath;
+            }
+            return path.join(process.resourcesPath, filepath);
+        };
+
+        let apps = [];
+        let timeoutId;
+        let currentAudio = null;
+
+        document.addEventListener('selectstart', (e) => {
+            e.preventDefault();
+        });
+
+        async function loadCharacter(characterFolder) {
+            const app = new PIXI.Application({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                backgroundAlpha: 0,
+                transparent: true,
+                antialias: true
+            });
+
+            document.body.appendChild(app.view);
+            const cont = new PIXI.Container();
+            app.stage.addChild(cont);
+            apps.push(app);
+
+            const basePath = characterFolder ? getAssetPath(`${characterFolder}/`) : '';
+            
+            try {
+                let imageExtension = 'png';
+                if (!fs.existsSync(`${basePath}data.png`)) {
+                    imageExtension = 'webp';
+                }
+
+                const [jsonResponse, atlasResponse, textureResponse] = await Promise.all([
+                    fetch(`${basePath}data.json`).then(r => r.json()),
+                    fetch(`${basePath}data.atlas`).then(r => r.text()),
+                    fetch(`${basePath}data.${imageExtension}`)
+                        .then(r => r.blob())
+                        .then(blobToBase64)
+                ]);
+
+                const spineAtlas = new PIXI.spine.TextureAtlas(atlasResponse, (line, callback) => {
+                    callback(PIXI.BaseTexture.from(textureResponse));
+                });
+
+                const spineJsonParser = new PIXI.spine.SkeletonJson();
+                const spineData = spineJsonParser.readSkeletonData(spineAtlas, jsonResponse);
+                
+                renderSpineAnimation(spineData, cont, app, characterFolder);
+            } catch (error) {
+                console.error('Loading error:', error);
+            }
+        }
+
+        function renderSpineAnimation(spineData, cont, app, characterFolder) {
+            const animation = new PIXI.spine.Spine(spineData);
+            
+            try {
+                animation.skeleton.setSkinByName("normal");
+            } catch (e) {
+                animation.skeleton.setSkinByName("default");
+            }
+            
+            if (characterFolder && characterFolder.includes('cb_costume')) {
+                animation.scale.set(1.3);  
+            } else {
+                animation.scale.set(0.5);  
+            }
+            const bounds = animation.getBounds();
+            
+            
+            if (characterFolder && characterFolder.includes('cb')) {
+                animation.position.set(
+                    bounds.width / 1 + 70,
+                    app.screen.height/2 + 20 
+                );
+                
+                ipcRenderer.send('resize-window', {
+                    width: bounds.width+200,
+                    height: bounds.height+120
+                });
+            } else {
+                animation.position.set(
+                    bounds.width/2 + 40,
+                    app.screen.height/2.3 + 20
+                );
+                
+                ipcRenderer.send('resize-window', {
+                    width: bounds.width+100,
+                    height: bounds.height+70
+                });
+            }
+
+            animation.eventMode = 'static';
+            animation.interactive = true;
+
+            const dragArea = document.createElement('div');
+            dragArea.style.position = 'absolute';
+            dragArea.style.width = `${bounds.width+50}px`;
+            dragArea.style.height = `${(2 / 3) * (bounds.height + 70)}px`;
+            dragArea.style.webkitAppRegion = 'drag';
+            dragArea.style.position = 'absolute';
+            dragArea.style.left = `${animation.position.x - 130}px`;
+            dragArea.style.bottom = `0px`;
+            document.body.appendChild(dragArea);
+
+            animation.on('click', () => {
+                playAnimation(animation, characterFolder);
+            });
+
+            cont.addChild(animation);
+            animation.state.setAnimation(47, "wait", true);
+        }
+
+        function playAnimation(animation, characterFolder) {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+            }
+
+            for (let i = 0; i < 50; i++) {
+                animation.state.clearTrack(i);
+            }
+            
+            lipAnimationActive = false;
+
+            animation.skeleton.setToSetupPose();
+            
+            const voicePath = getAssetPath(characterFolder.includes('akane') ? 'akane/voice' : 'kiriko/voice');
+            const soundFiles = fs.readdirSync(voicePath)
+                .filter(file => file.endsWith('.m4a'))
+                .map(file => `${voicePath}/${file}`);
+            
+            const randomSound = soundFiles[Math.floor(Math.random() * soundFiles.length)];
+            const audio = new Audio(randomSound);
+            audio.mozPreservesPitch = false;
+            audio.preservesPitch = false;
+            
+            const audioContext = new AudioContext();
+            const source = audioContext.createMediaElementSource(audio);
+            const analyser = audioContext.createAnalyser();
+            const stereoPanner = audioContext.createStereoPanner();
+
+            analyser.fftSize = 256;
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            source.connect(analyser);
+            analyser.connect(stereoPanner);
+            stereoPanner.connect(audioContext.destination);
+            stereoPanner.pan.value = 0;
+
+            currentAudio = audio;
+
+            if (characterFolder && characterFolder.includes('cb')) {
+                const animations = animation.spineData.animations;
+                const randomIndex = Math.floor(Math.random() * animations.length);
+                const randomAnimation = animations[randomIndex];
+                
+                animation.state.setAnimation(44, randomAnimation.name, true);
+                
+            } else if (!characterFolder.includes('cb')) {
+                let lipAnimationActive = false;
+                
+                lipAnimationActive = false;
+                animation.state.clearTrack(32);
+                animation.state.clearTrack(33);
+
+                const checkVolume = () => {
+                    analyser.getByteFrequencyData(dataArray);
+                    const voiceFrequencies = dataArray.slice(0, Math.floor(bufferLength * 0.4));
+                    const average = voiceFrequencies.reduce((a, b) => a + b) / voiceFrequencies.length;
+                    
+                    if (average > 12) {
+                        if (!lipAnimationActive) {
+                            lipAnimationActive = true;
+                            animation.state.setAnimation(32, "lip_wait", true);
+                        }
+                    } else if (average < 8) {
+                        if (lipAnimationActive) {
+                            lipAnimationActive = false;
+                            animation.state.clearTrack(32);
+                            const track = animation.state.setAnimation(33, "lip_wait_s", false);
+                            track.listener = {
+                                complete: () => {
+                                    animation.state.clearTrack(33);
+                                    lipAnimationActive = false;
+                                }
+                            };
+                        }
+                    }
+                    
+                    if (!audio.ended) {
+                        requestAnimationFrame(checkVolume);
+                    }
+                };
+
+                audio.play().then(() => {
+                    checkVolume();
+                });
+                
+                audio.onended = () => {
+                    animation.state.clearTrack(32);
+                    const track33 = animation.state.setAnimation(33, "lip_wait_s", false);
+                    track33.listener = {
+                        complete: () => {
+                            animation.state.clearTrack(33);
+                        }
+                    };
+                };
+
+                animation.state.setAnimation(44, "smile2", false);
+
+                timeoutId = setTimeout(() => {
+                    animation.state.clearTracks();
+                    animation.skeleton.setToSetupPose();
+                    animation.state.setAnimation(47, "wait", true);
+                    timeoutId = null;
+                }, 8900);
+            }
+        }
+
+        function blobToBase64(blob) {
+            return new Promise((resolve, _) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        ipcRenderer.on('load-character', (event, characterFolder) => {
+            loadCharacter(characterFolder);
+        });
+
+        window.addEventListener('resize', () => {
+            apps.forEach(app => {
+                app.renderer.resize(window.innerWidth, window.innerHeight);
+            });
+        });
+    </script>
+</body>
+</html>

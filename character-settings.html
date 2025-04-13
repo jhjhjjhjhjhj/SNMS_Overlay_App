@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Character Settings</title>
+    <style>
+        body {
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        .character-list {
+            margin-top: 20px;
+        }
+        .character-item {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .category {
+            margin: 20px 0;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+        .category-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        button {
+            padding: 5px 10px;
+        }
+        .active-windows {
+            margin-bottom: 20px;
+        }
+        .window-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            margin: 5px 0;
+            background: #f0f0f0;
+            border-radius: 4px;
+        }
+        .close-button {
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h2>Active Windows</h2>
+    <div class="active-windows" id="activeWindows">
+        <div class="category">
+            <div class="category-title">Currently Open Characters</div>
+        </div>
+    </div>
+
+    <h2>Character Categories</h2>
+    <div class="character-list" id="characterList"></div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+        const fs = require('fs');
+        const path = require('path');
+        const isDev = process.env.NODE_ENV === 'development';
+
+        function getAssetPath(filepath) {
+            if (isDev) {
+                return filepath;
+            }
+            return path.join(process.resourcesPath, filepath);
+        }
+
+        function checkImageExists(basePath) {
+            try {
+                const fullPath = getAssetPath(basePath);
+                return fs.existsSync(`${fullPath}/data.png`) || fs.existsSync(`${fullPath}/data.webp`);
+            } catch (err) {
+                return false;
+            }
+        }
+
+        function createCategorySection(title, characters) {
+            if (characters.length === 0) return '';
+            
+            const categoryDiv = document.createElement('div');
+            categoryDiv.className = 'category';
+            
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'category-title';
+            titleDiv.textContent = title;
+            categoryDiv.appendChild(titleDiv);
+
+            characters.forEach(char => {
+                const div = document.createElement('div');
+                div.className = 'character-item';
+                div.innerHTML = `
+                    <span>${char.split('/').pop()}</span>
+                    <button onclick="loadCharacter('${char}')">Load</button>
+                `;
+                categoryDiv.appendChild(div);
+            });
+
+            return categoryDiv;
+        }
+
+        function loadCharacterList() {
+            const characterList = document.getElementById('characterList');
+            characterList.innerHTML = '';
+
+            const baseCharacters = [];
+            try {
+                const files = fs.readdirSync(getAssetPath('./'));
+                baseCharacters.push(...files.filter(file => {
+                    try {
+                        if (file === 'app.asar') return false;
+                        
+                        const isDirectory = fs.statSync(getAssetPath(file)).isDirectory();
+                        const hasDataFiles = fs.existsSync(getAssetPath(`${file}/data.json`)) && 
+                                           fs.existsSync(getAssetPath(`${file}/data.atlas`)) &&
+                                           (fs.existsSync(getAssetPath(`${file}/data.png`)) || 
+                                            fs.existsSync(getAssetPath(`${file}/data.webp`)));
+                        
+                        return isDirectory && (hasDataFiles || file === 'kiriko' || file === 'akane' || file === 'cb_akane');
+                    } catch (err) {
+                        return false;
+                    }
+                }));
+            } catch (err) {
+                console.log('Error reading base directory:', err);
+            }
+
+            const categories = {
+                'CB': [],
+                'CB Costume': [],
+                'Standing': [],
+                'Standing Costume': []
+            };
+
+            const variations = {
+                'cb': 'CB',
+                'cb_costume': 'CB Costume',
+                'stand': 'Standing',
+                'stand_costume': 'Standing Costume'
+            };
+
+            Object.entries(variations).forEach(([folder, category]) => {
+                try {
+                    const variationPath = getAssetPath(`kiriko/${folder}`);
+                    if (fs.existsSync(variationPath) && fs.statSync(variationPath).isDirectory()) {
+                        if (fs.existsSync(`${variationPath}/data.json`) && checkImageExists(`kiriko/${folder}`)) {
+                            categories[category].push(`kiriko/${folder}`);
+                        }
+
+                        fs.readdirSync(variationPath)
+                            .filter(subfolder => {
+                                const subfolderPath = path.join(variationPath, subfolder);
+                                return fs.statSync(subfolderPath).isDirectory() &&
+                                       fs.existsSync(path.join(subfolderPath, 'data.json')) &&
+                                       (fs.existsSync(path.join(subfolderPath, 'data.png')) || 
+                                        fs.existsSync(path.join(subfolderPath, 'data.webp')));
+                            })
+                            .forEach(subfolder => {
+                                categories[category].push(`kiriko/${folder}/${subfolder}`);
+                            });
+                    }
+                } catch (err) {
+                    console.log(`Error processing kiriko/${folder}:`, err);
+                }
+            });
+
+            if (baseCharacters.length > 0) {
+                characterList.appendChild(createCategorySection('Base Characters', baseCharacters));
+            }
+
+            Object.entries(categories).forEach(([category, chars]) => {
+                if (chars.length > 0) {
+                    characterList.appendChild(createCategorySection(category, chars));
+                }
+            });
+            
+            updateActiveWindows();
+        }
+
+        function loadCharacter(characterFolder) {
+            ipcRenderer.send('change-character', characterFolder);
+        }
+
+        function updateActiveWindows() {
+            ipcRenderer.send('get-active-windows');
+        }
+
+        function closeCharacterWindow(windowId) {
+            ipcRenderer.send('close-character-window', windowId);
+        }
+
+        ipcRenderer.on('active-windows-list', (event, windows) => {
+            const activeWindowsDiv = document.getElementById('activeWindows');
+            const listDiv = activeWindowsDiv.querySelector('.category');
+            
+            const windowsList = windows.map(window => `
+                <div class="window-item">
+                    <span>${window.characterFolder}</span>
+                    <button class="close-button" onclick="closeCharacterWindow('${window.id}')">Close</button>
+                </div>
+            `).join('');
+            
+            listDiv.innerHTML = `
+                <div class="category-title">Currently Open Characters</div>
+                ${windowsList}
+            `;
+        });
+
+        ipcRenderer.on('update-active-windows', () => {
+            updateActiveWindows();
+        });
+
+        loadCharacterList();
+    </script>
+</body>
+</html>

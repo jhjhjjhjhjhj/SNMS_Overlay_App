@@ -1,0 +1,49 @@
+{
+  "name": "snms_overlay",
+  "version": "1.0.0",
+  "description": "SNMS Character Overlay",
+  "author": "SNMS",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win portable",
+     "build:mac": "electron-builder --mac dmg"
+  },
+  "build": {
+    "appId": "com.snms.overlay",
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.entertainment",
+      "darkModeSupport": true
+    },
+    "win": {
+      "target": ["portable", "zip"],
+      "artifactName": "${productName}-portable-${version}.${ext}"
+    },
+    "files": [
+      "**/*",
+      "!kiriko/**/*",
+      "!akane/**/*",
+      "!cb_akane/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "kiriko",
+        "to": "kiriko"
+      },
+      {
+        "from": "akane",
+        "to": "akane"
+      },
+      {
+        "from": "cb_akane",
+        "to": "cb_akane"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^25.0.0",
+    "electron-builder": "^24.6.4"
+  }
+}
